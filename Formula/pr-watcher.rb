@@ -2,7 +2,7 @@ class PrWatcher < Formula
   desc "Menu bar watcher that notifies when GitHub PRs get merged"
   homepage "https://github.com/amineaffif/homebrew-pr-watcher"
   url "https://github.com/amineaffif/homebrew-pr-watcher/archive/refs/tags/v0.1.3.tar.gz"
-  sha256 "REPLACE_ME_AFTER_RELEASE"
+  sha256 "62a87cd6cab67835cba1d49c8cf163607cd711e9921880409cecf2b8a9e4a990"
   license "MIT"
   version "0.1.3"
 
