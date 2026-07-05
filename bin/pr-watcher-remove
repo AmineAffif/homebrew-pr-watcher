@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Pick a watched PR from a list and remove it from the config.
+set -euo pipefail
+umask 077
+
+CONFIG="${HOME}/.pr-watcher/config.json"
+STATE="${HOME}/.pr-watcher/state.json"
+[ -f "$CONFIG" ] || echo '{"prs":[]}' > "$CONFIG"
+[ -f "$STATE" ]  || echo '{}' > "$STATE"
+
+# Read watched PRs into an array. Validated URLs never contain whitespace.
+prs=()
+while IFS= read -r line; do
+  [ -n "$line" ] && prs+=("$line")
+done < <(jq -r '.prs[]' "$CONFIG")
+
+if [ "${#prs[@]}" -eq 0 ]; then
+  osascript -e 'display alert "Nothing to remove" message "No PRs are being watched." as informational' >/dev/null 2>&1 || true
+  exit 0
+fi
+
+# URLs are passed as arguments; AppleScript builds the picker list from argv, so a
+# hand-edited config cannot inject AppleScript source.
+selected="$(osascript - "${prs[@]}" <<'OSA' 2>/dev/null || true
+on run argv
+  tell application "System Events"
+    activate
+    set chosen to (choose from list argv with title "pr-watcher — Remove PR" with prompt "Pick the PR to remove:" OK button name "Remove" cancel button name "Cancel")
+    if chosen is false then return ""
+    return item 1 of chosen
+  end tell
+end run
+OSA
+)"
+
+[ -z "$selected" ] && exit 0
+
+tmp="$(mktemp)"
+jq --arg u "$selected" '.prs |= map(select(. != $u))' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+
+tmp2="$(mktemp)"
+jq --arg u "$selected" 'del(.[$u])' "$STATE" > "$tmp2" && mv "$tmp2" "$STATE"
+
+osascript - "${selected#https://github.com/}" <<'OSA' >/dev/null 2>&1 || true
+on run argv
+  display notification (item 1 of argv) with title "pr-watcher — removed 🗑"
+end run
+OSA

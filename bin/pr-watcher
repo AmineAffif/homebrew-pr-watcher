@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# PR watcher — polls GitHub PRs and celebrates when they merge.
+# Config: ~/.pr-watcher/config.json — { "prs": [ "https://github.com/.../pull/N", ... ] }
+# State:  ~/.pr-watcher/state.json  — last seen state per URL (drives the transition)
+# Log:    ~/.pr-watcher/logs/pr-watcher.log
+set -euo pipefail
+umask 077   # config/state/logs/celebration pages are user-only (0600).
+
+CONFIG="${HOME}/.pr-watcher/config.json"
+STATE="${HOME}/.pr-watcher/state.json"
+LOG_DIR="${HOME}/.pr-watcher/logs"
+LOG_FILE="${LOG_DIR}/pr-watcher.log"
+
+# Resource files ship with Homebrew and land in ${HOMEBREW_PREFIX}/share/pr-watcher.
+# Fall back to Apple Silicon default when the var isn't set (running the script by hand).
+SHARE_DIR="${PR_WATCHER_SHARE:-${HOMEBREW_PREFIX:-/opt/homebrew}/share/pr-watcher}"
+
+log() { echo "$(date '+%F %T') $*" >> "$LOG_FILE"; }
+
+# HTML-escape untrusted values before injecting them into the celebration page.
+# PR titles are attacker-controlled (anyone who can open a PR you watch sets the
+# title), so escaping here prevents HTML/JS injection into a page we open locally.
+html_escape() {
+  local s=$1
+  s=${s//&/&amp;}
+  s=${s//</&lt;}
+  s=${s//>/&gt;}
+  s=${s//\"/&quot;}
+  s=${s//\'/&#39;}
+  printf '%s' "$s"
+}
+
+mkdir -p "$(dirname "$STATE")" "$LOG_DIR"
+[ -f "$STATE" ] || echo '{}' > "$STATE"
+[ -f "$CONFIG" ] || echo '{"prs":[]}' > "$CONFIG"
+
+# Refuse to run on a corrupt config (never clobber the user's watch list);
+# a corrupt state file is safe to reset — it just re-detects current states.
+if ! jq -e . "$CONFIG" >/dev/null 2>&1; then
+  log "ERROR: config.json is not valid JSON — aborting without touching it"
+  exit 1
+fi
+if ! jq -e . "$STATE" >/dev/null 2>&1; then
+  log "WARN: state.json was invalid — resetting to {}"
+  echo '{}' > "$STATE"
+fi
+
+# Guard: only run Mon–Fri, 9h–16h59 local time. `--force` bypasses (manual runs).
+if [[ "${1:-}" != "--force" ]]; then
+  dow="$(date +%u)"      # 1=Mon … 7=Sun
+  hour="$(date +%H)"
+  if [ "$dow" -gt 5 ] || [ "$hour" -lt 9 ] || [ "$hour" -ge 17 ]; then
+    exit 0
+  fi
+fi
+
+notified=0
+checked=0
+updates=""   # accumulated "url<TAB>state" lines; the new state is built once at the end
+
+# One jq pass yields each watched URL alongside its previously-seen state, so the
+# loop needs no per-PR jq just to look up the previous value.
+while IFS=$'\t' read -r url prev; do
+  [ -z "$url" ] && continue
+  checked=$((checked + 1))
+
+  info="$(gh pr view "$url" --json state,mergedAt,title,number 2>>"$LOG_FILE" || true)"
+  if [ -z "$info" ]; then
+    log "WARN: gh pr view failed for $url"
+    continue
+  fi
+
+  # Extract every field in a single jq call (PR titles never contain newlines,
+  # so line-based reads are safe).
+  { IFS= read -r state; IFS= read -r title; IFS= read -r number; IFS= read -r merged_at; } \
+    < <(printf '%s' "$info" | jq -r '.state, .title, .number, (.mergedAt // "")')
+
+  if [ "$state" = "MERGED" ] && [ "$prev" != "MERGED" ]; then
+    repo="$(echo "$url" | sed -E 's|https://github.com/([^/]+)/([^/]+)/pull/[0-9]+.*|\1/\2|')"
+
+    # Big animated celebration in the browser (persistent until user closes tab).
+    # Every dynamic value is HTML-escaped and substituted via pure-bash string
+    # replacement (no sed) so a crafted PR title cannot inject HTML/JS.
+    template="${SHARE_DIR}/notify.template.html"
+    if [ -f "$template" ]; then
+      out="${HOME}/.pr-watcher/notify-${number}.html"
+      page="$(cat "$template")"
+      page="${page//\{\{NUMBER\}\}/$(html_escape "$number")}"
+      page="${page//\{\{TITLE\}\}/$(html_escape "$title")}"
+      page="${page//\{\{URL\}\}/$(html_escape "$url")}"
+      page="${page//\{\{REPO\}\}/$(html_escape "$repo")}"
+      page="${page//\{\{MERGED_AT\}\}/$(html_escape "$merged_at")}"
+      printf '%s' "$page" > "$out"
+      # PRW_OPEN lets tests capture the opened path; defaults to the absolute
+      # /usr/bin/open in production (avoids PATH-hijack of `open`).
+      "${PRW_OPEN:-/usr/bin/open}" "$out" >/dev/null 2>&1 || true
+    fi
+
+    # Native macOS notification. The message is passed as an argument (never
+    # interpolated into the AppleScript source) to prevent AppleScript injection.
+    osascript - "#${number} — ${title}" <<'OSA' >/dev/null 2>&1 || true
+on run argv
+  display notification (item 1 of argv) with title "PR merged 🎉" sound name "Glass"
+end run
+OSA
+
+    notified=$((notified + 1))
+    log "MERGED #${number} $url"
+  fi
+
+  updates+="${url}"$'\t'"${state}"$'\n'
+done < <(jq -r --slurpfile s "$STATE" '.prs[] as $u | [$u, ($s[0][$u] // "")] | @tsv' "$CONFIG")
+
+# Build the new state in one jq pass and write it atomically (mktemp + mv) so the
+# SwiftBar plugin can never read a half-written state.json.
+upd_json="$(printf '%s' "$updates" \
+  | jq -R -s 'split("\n") | map(select(length > 0) | split("\t") | {(.[0]): (.[1] // "")}) | add // {}')"
+tmp="$(mktemp "${STATE}.XXXXXX")"
+jq --argjson upd "$upd_json" '. + $upd' "$STATE" > "$tmp" && mv "$tmp" "$STATE"
+
+# Purge celebration pages older than a day so they don't accumulate in ~/.pr-watcher.
+find "${HOME}/.pr-watcher" -maxdepth 1 -name 'notify-*.html' -type f -mtime +1 -delete 2>/dev/null || true
+
+log "checked=${checked} notified=${notified}"

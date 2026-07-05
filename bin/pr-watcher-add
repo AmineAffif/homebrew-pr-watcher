@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Prompt for a GitHub PR URL and add it to the watch list.
+set -euo pipefail
+umask 077
+
+CONFIG="${HOME}/.pr-watcher/config.json"
+mkdir -p "$(dirname "$CONFIG")"
+[ -f "$CONFIG" ] || echo '{"prs":[]}' > "$CONFIG"
+
+url="$(osascript <<'APPLESCRIPT' 2>/dev/null || true
+tell application "System Events"
+  activate
+  set dlg to display dialog "PR URL (GitHub):" default answer "" buttons {"Cancel", "Add"} default button "Add" with title "pr-watcher — Add PR"
+  if button returned of dlg is "Cancel" then return ""
+  return text returned of dlg
+end tell
+APPLESCRIPT
+)"
+
+[ -z "$url" ] && exit 0
+url="$(echo "$url" | awk '{$1=$1};1')"
+
+if ! [[ "$url" =~ ^https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+/pull/[0-9]+/?$ ]]; then
+  osascript -e "display alert \"Invalid URL\" message \"Expected format:\n\nhttps://github.com/OWNER/REPO/pull/NUMBER\" as critical" >/dev/null 2>&1 || true
+  exit 1
+fi
+url="${url%/}"
+
+tmp="$(mktemp)"
+jq --arg u "$url" '.prs |= (. + [$u] | unique)' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+
+pr-watcher --force >/dev/null 2>&1 || true
+
+label="$(echo "$url" | sed -E 's|https://github.com/([^/]+)/([^/]+)/pull/([0-9]+).*|\2 #\3|')"
+osascript - "$label" <<'OSA' >/dev/null 2>&1 || true
+on run argv
+  display notification (item 1 of argv) with title "pr-watcher — added ✅"
+end run
+OSA

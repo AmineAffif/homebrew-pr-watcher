@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Remove a specific PR URL from the watch list. Called by the "🗑 Remove"
+# submenu entry (SwiftBar passes the URL as $1).
+set -euo pipefail
+umask 077
+
+url="${1:-}"
+[ -z "$url" ] && exit 0
+
+CONFIG="${HOME}/.pr-watcher/config.json"
+STATE="${HOME}/.pr-watcher/state.json"
+[ -f "$CONFIG" ] || echo '{"prs":[]}' > "$CONFIG"
+[ -f "$STATE" ]  || echo '{}' > "$STATE"
+
+tmp="$(mktemp)"
+jq --arg u "$url" '.prs |= map(select(. != $u))' "$CONFIG" > "$tmp" && mv "$tmp" "$CONFIG"
+
+tmp2="$(mktemp)"
+jq --arg u "$url" 'del(.[$u])' "$STATE" > "$tmp2" && mv "$tmp2" "$STATE"
+
+label="$(echo "$url" | sed -E 's|https://github.com/([^/]+)/([^/]+)/pull/([0-9]+).*|\2 #\3|')"
+osascript - "$label" <<'OSA' >/dev/null 2>&1 || true
+on run argv
+  display notification (item 1 of argv) with title "pr-watcher — removed 🗑"
+end run
+OSA

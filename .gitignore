@@ -1,0 +1,8 @@
+.DS_Store
+*.log
+/tmp/
+
+# Personal files — kept locally, never shipped to users.
+PUBLISH.md
+SLACK_ANNOUNCE.md
+SLACK_ANNOUNCE_QUESTIONS.md

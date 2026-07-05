@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Copy a PR URL to the clipboard.
+set -euo pipefail
+url="${1:-}"
+[ -z "$url" ] && exit 0
+printf '%s' "$url" | pbcopy
+# Title passed as an argument (not interpolated into AppleScript) — $1 is untrusted.
+osascript - "${url##*/pull/}" <<'OSA' >/dev/null 2>&1 || true
+on run argv
+  display notification (item 1 of argv) with title "pr-watcher — copied 📋"
+end run
+OSA

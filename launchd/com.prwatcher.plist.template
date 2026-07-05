@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.prwatcher</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__PRWATCHER_BIN__</string>
+    </array>
+
+    <!-- Fires every hour. The script itself gates Mon-Fri 9h-16h59; anything
+         outside that window exits immediately. -->
+    <key>StartInterval</key>
+    <integer>3600</integer>
+
+    <!-- Fires once at login too, so a fresh boot inside working hours notifies. -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>__LOG_DIR__/stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>__LOG_DIR__/stderr.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>__HOMEBREW_BIN__:/usr/local/bin:/usr/bin:/bin</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+        <key>PR_WATCHER_SHARE</key>
+        <string>__SHARE_DIR__</string>
+    </dict>
+</dict>
+</plist>
